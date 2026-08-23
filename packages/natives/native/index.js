@@ -87,6 +87,7 @@ export const renameNoReplacePathAsync = nativeBindings.renameNoReplacePathAsync;
 export const repairOwnerOnlyPathSecurityExpected = nativeBindings.repairOwnerOnlyPathSecurityExpected;
 export const retainBrokerPublication = nativeBindings.retainBrokerPublication;
 export const search = nativeBindings.search;
+export const secureWriteSkillFile = nativeBindings.secureWriteSkillFile;
 export const sliceWithWidth = nativeBindings.sliceWithWidth;
 export const snapshotDirectoryTree = nativeBindings.snapshotDirectoryTree;
 export const summarizeCode = nativeBindings.summarizeCode;
