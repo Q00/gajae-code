@@ -3029,6 +3029,7 @@ export function createSdkSessionRuntimeExtension(api: ExtensionAPI, options: Cre
 				drainedInvocations?: Array<{ kind: InvocationKind; correlation: InvocationCorrelation }>;
 				attachedInvocations?: Array<{ kind: InvocationKind; correlation: InvocationCorrelation }>;
 				openLifecycleBatches: Array<{
+					epoch: number;
 					invocations: Array<{
 						kind: InvocationKind;
 						correlation: InvocationCorrelation;
@@ -3144,7 +3145,11 @@ export function createSdkSessionRuntimeExtension(api: ExtensionAPI, options: Cre
 				.splice(0)
 				.filter(entry => entry.kind !== "prompt" || !current.deadlineManager.isExpiring(entry.correlation));
 			if (drained.length > 0) {
-				current.openLifecycleBatches.push({ invocations: drained, attachedInvocations: [] });
+				current.openLifecycleBatches.push({
+					epoch: current.lifecycleEpoch,
+					invocations: drained,
+					attachedInvocations: [],
+				});
 				adoptLifecycleBatch(drained);
 				if (current.activeInvocation?.kind === "prompt") {
 					current.deadlineManager.onAccepted(current.activeInvocation.correlation);
@@ -3175,7 +3180,14 @@ export function createSdkSessionRuntimeExtension(api: ExtensionAPI, options: Cre
 				}),
 			];
 		}
-		const eventLifecycleEpoch = current.lifecycleEpoch;
+		// A delayed end belongs to the immutable epoch of the oldest unmatched
+		// lifecycle batch, not the mutable session-global epoch a successor start
+		// may already have advanced to. Publication proof and race retirement must
+		// use the same batch identity as reconciliation.
+		const eventLifecycleEpoch =
+			type === "agent_end"
+				? (current.openLifecycleBatches[0]?.epoch ?? current.lifecycleEpoch)
+				: current.lifecycleEpoch;
 		const resolveTerminalPublicationWaiters = (observed: boolean): void => {
 			const waiters = terminalPublicationCapture.waiters;
 			if (!waiters) return;
@@ -3515,6 +3527,7 @@ export function createSdkSessionRuntimeExtension(api: ExtensionAPI, options: Cre
 		for (const { correlation, acceptedAt } of reconciliation.listDeadlineRecoveryPendingPrompts())
 			deadlineManager.recoverPending(correlation, acceptedAt);
 		const openLifecycleBatches: Array<{
+			epoch: number;
 			invocations: Array<{
 				kind: InvocationKind;
 				correlation: InvocationCorrelation;
