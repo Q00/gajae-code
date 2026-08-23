@@ -174,6 +174,24 @@ it("isolates source SDK children and preserves compiled self-spawn", () => {
 	});
 });
 
+it("accepts only exact compiled-marker-authorized Bun virtual executable paths", () => {
+	const markerPath = "/$bunfs/root/internal-source-marker-2178-abcd.txt";
+	expect(
+		resolveSdkInternalSpawnCommandForTest("session-host-internal", {
+			execPath: "/$bunfs/root/gjc",
+			markerPath,
+			embeddedFiles: [{ name: path.basename(markerPath) }],
+		}),
+	).toMatchObject({ kind: "compiled", file: "/$bunfs/root/gjc" });
+	expect(() =>
+		resolveSdkInternalSpawnCommandForTest("session-host-internal", {
+			execPath: "/not/a/runtime",
+			markerPath,
+			embeddedFiles: [{ name: path.basename(markerPath) }],
+		}),
+	).toThrow("compiled executable is not a readable regular file");
+});
+
 it("treats explicit broker env as a complete allowlist and still scrubs runtime options", () => {
 	const command = resolveSdkInternalSpawnCommandForTest("broker-internal", {
 		environment: { AMBIENT_SENTINEL: "must-not-leak" },

@@ -64,6 +64,30 @@ function regularReadablePath(file: string, label: string): string {
 	return canonical;
 }
 
+function isBunVirtualExecutablePath(file: string): boolean {
+	const normalized = file.replaceAll("\\", "/").toLowerCase();
+	return (
+		normalized === "/$bunfs" || normalized.startsWith("/$bunfs/") || /^(?:[a-z]:)?\/~bun(?:\/|$)/.test(normalized)
+	);
+}
+
+/**
+ * Bun normally exposes the compiled application's on-disk path through
+ * `process.execPath`. Some single-file builds instead expose their virtual
+ * bundle entry there. Exact compiled-marker evidence proves that the virtual
+ * path is this bundled GJC application's own self-spawn target; no argv/PATH
+ * fallback is permitted because either can be caller-controlled.
+ */
+function compiledExecutable(options: SdkInternalRuntimeDescriptorTestOptions): string {
+	const execPath = options.execPath ?? process.execPath;
+	try {
+		return regularReadablePath(path.resolve(execPath), "compiled executable");
+	} catch (error) {
+		if (!isBunVirtualExecutablePath(execPath)) throw error;
+		return execPath;
+	}
+}
+
 function internalEnvironment(environment: NodeJS.ProcessEnv, source: boolean): NodeJS.ProcessEnv {
 	const isolated = { ...environment };
 	delete isolated.BUN_OPTIONS;
@@ -139,7 +163,7 @@ function resolveSdkInternalSpawnCommandWithEvidence(
 	const isSourceMarker = path.isAbsolute(markerPath) && !compiledMarkerPath;
 	if (embeddedFiles.length === 0 && isSourceMarker) return sourceDescriptor(action, options, markerPath);
 	if (exactCompiledArtifact && compiledMarkerPath) {
-		const executable = regularReadablePath(path.resolve(options.execPath ?? process.execPath), "compiled executable");
+		const executable = compiledExecutable(options);
 		return {
 			kind: "compiled",
 			file: executable,

@@ -99,6 +99,7 @@ const MAX_RECEIVED_AT_SKEW_MS = 5_000;
 const MAX_LIFECYCLE_METADATA_BYTES = 4096;
 const MAX_EFFECT_MARKER_LENGTH = 128;
 const MAX_PROCESS_INCARNATION_LENGTH = 256;
+const DEAD_LIFECYCLE_MARKER_EXPIRY_MS = 60 * 60 * 1000;
 const READY_THEN_EXIT_MESSAGE = "became ready then exited before live admission";
 
 function readyThenExitedResponse(id: string, child?: ChildProcess): BrokerResponse {
@@ -1037,6 +1038,74 @@ async function readEffectMarker(file: string): Promise<EffectMarker | undefined>
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Retires stale lifecycle markers only when their exact owner is proven gone. These
+ * files are launch bookkeeping, not authority for a future process: retaining
+ * an abandoned marker indefinitely turns unrelated launch failures into
+ * cleanup uncertainty. Unreadable, malformed, linked, and live markers are
+ * deliberately left untouched.
+ */
+export async function reapDeadLifecycleMarkers(
+	root: string,
+	limit = BROKER_DEAD_REGISTRATION_SWEEP_LIMIT,
+): Promise<number> {
+	const directory = path.join(root, "sdk");
+	let names: string[];
+	try {
+		names = await fs.readdir(directory);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+		return 0;
+	}
+	let reaped = 0;
+	for (const name of names) {
+		if (reaped >= Math.max(0, limit) || !name.endsWith(".lifecycle.json")) continue;
+		const markerPath = path.join(directory, name);
+		const marker = await readEffectMarker(markerPath);
+		if (!marker || observeProcess(marker.pid, marker.incarnation) !== "exited") continue;
+		const captured = captureLifecycleFile(markerPath, true, true);
+		if (!captured || Date.now() - Number(captured.identity.mtimeNs / 1_000_000n) < DEAD_LIFECYCLE_MARKER_EXPIRY_MS)
+			continue;
+		const current = await readEffectMarker(markerPath);
+		if (!current || !sameEffectMarker(current, marker)) continue;
+		try {
+			const currentIdentity = captureLifecycleFile(markerPath, true, true)?.identity;
+			if (
+				!currentIdentity ||
+				!sameLifecycleCleanupIdentity(
+					currentIdentity,
+					serializeCleanupIdentity({ ...captured.identity, size: Number(captured.identity.size) }),
+				)
+			)
+				continue;
+			await fs.unlink(markerPath);
+		} catch {
+			continue;
+		}
+		const id = name.slice(0, -".lifecycle.json".length);
+		const readyPath = lifecycleReadyPath(root, id);
+		const ready = captureLifecycleFile(readyPath, true, true);
+		if (ready) {
+			try {
+				const readyMarker = parseLifecycleJson(ready.bytes);
+				if (isExactEffectMarker(readyMarker) && sameEffectMarker(readyMarker, marker)) {
+					const currentReady = captureLifecycleFile(readyPath, true, true)?.identity;
+					if (
+						currentReady &&
+						sameLifecycleCleanupIdentity(
+							currentReady,
+							serializeCleanupIdentity({ ...ready.identity, size: Number(ready.identity.size) }),
+						)
+					)
+						await fs.unlink(readyPath);
+				}
+			} catch {}
+		}
+		reaped += 1;
+	}
+	return reaped;
 }
 
 async function writeEffectMarker(root: string, id: string, marker: EffectMarker): Promise<void> {
@@ -3943,6 +4012,7 @@ async function executeLifecycleResponse(
 				await broker.ledger.transition(identity, "effect_started", { durableEffects });
 				ensureReusableNodeModules(launch.worktreePlan.repoRoot, launch.worktreePlan.worktreePath);
 			}
+			await reapDeadLifecycleMarkers(launch.root);
 		} catch (error) {
 			return fail(
 				"spawn_failed",
@@ -5309,7 +5379,10 @@ export async function executeLifecycle(
 										error: {
 											code: "terminal_uncertain",
 											message:
-												"Lifecycle startup cleanup could not be proven; retained artifacts require reconciliation.",
+												"Lifecycle startup cleanup could not be proven; retained artifacts require reconciliation." +
+												(response.error.code === "spawn_failed"
+													? ` Original launch failure: ${response.error.message}`
+													: ""),
 										},
 										...(durableEffects ? { durableEffects } : {}),
 										...(startupFailure ? { startupFailure } : {}),
