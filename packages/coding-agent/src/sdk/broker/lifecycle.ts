@@ -5062,6 +5062,10 @@ async function executeLifecycleResponse(
 				locator: record.locator,
 				endpointGeneration: record.endpointGeneration,
 				pid: record.pid,
+				...(record.processIncarnation === undefined ? {} : { processIncarnation: record.processIncarnation }),
+				...(record.hostIncarnation === undefined ? {} : { hostIncarnation: record.hostIncarnation }),
+				...(record.endpointMtimeMs === undefined ? {} : { endpointMtimeMs: record.endpointMtimeMs }),
+				...(record.lifecycleRequestId === undefined ? {} : { lifecycleRequestId: record.lifecycleRequestId }),
 			});
 		return completion;
 	}
